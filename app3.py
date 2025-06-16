@@ -1,43 +1,27 @@
-import streamlit as st
-from audiorecorder import audiorecorder
-import tempfile
+import sys
+import types
+import warnings
 import os
+import streamlit as st
+import tempfile
 import pandas as pd
 from datetime import datetime
 from textblob import TextBlob
 import google.generativeai as genai
 from dotenv import load_dotenv
 import io
-import whisper
-import sys
-import types
-import warnings
+import wave
+from streamlit_webrtc import webrtc_streamer, WebRtcMode, ClientSettings
+import av
 
-# Patch PyTorch class bug
+# Patch PyTorch class bug (if Whisper is ever re-added)
 import torch
 torch.classes = types.SimpleNamespace()
 sys.modules["torch.classes"] = torch.classes
-
-# Optional: Silence Whisper FP16 CPU fallback
 warnings.filterwarnings("ignore", message="FP16 is not supported on CPU; using FP32 instead")
 
-
-whisper_model = whisper.load_model("tiny")  # or "small", "medium", "large"
-
-engine = st.radio("Choose transcription engine", ["Gemini", "Whisper (Local)"])
-
-
-def transcribe_with_whisper(audio_path):
-    try:
-        result = whisper_model.transcribe(audio_path)
-        return result['text']
-    except Exception as e:
-        st.error(f"Whisper transcription failed: {e}")
-        return ""
-
-
 # Load API key
-load_dotenv()
+env_loaded = load_dotenv()
 GOOGLE_API_KEY = os.environ.get('GOOGLE_API_KEY')
 genai.configure(api_key=GOOGLE_API_KEY)
 
@@ -95,7 +79,6 @@ def save_results_to_text(data):
     results_filename = f"Results_of_{today_date}.txt"
     with open(results_filename, 'w', encoding='utf-8') as file:
         for entry in data:
-            file.write(f"Audio File Name: {entry['Audio File Name']}\n")
             file.write(f"Lecture Title: {entry.get('Lecture Title', '')}\n")
             file.write(f"Audio File Name: {entry['Audio File Name']}\n")
             file.write(f"Transcript/Translation: {entry['Transcript/Translation']}\n")
@@ -103,6 +86,16 @@ def save_results_to_text(data):
             file.write(f"Sentiment: {entry['Sentiment']}\n")
             file.write("\n" + "-"*50 + "\n\n")
     return results_filename
+
+# Audio recording class for webrtc
+class AudioRecorder:
+    def __init__(self):
+        self.frames = []
+
+    def recv(self, frame):
+        audio = frame.to_ndarray()
+        self.frames.append(audio)
+        return av.AudioFrame.from_ndarray(audio, layout="mono")
 
 # Main app
 def main():
@@ -139,11 +132,7 @@ def main():
                         temp_file.write(audio_file.read())
                         audio_path = temp_file.name
                     if option == "Transcribe":
-                        if engine == "Gemini":
-                            result_text = transcribe(audio_path, selected_format)
-                        else:
-                            result_text = transcribe_with_whisper(audio_path)
-
+                        result_text = transcribe(audio_path, selected_format)
                     else:
                         result_text = translate(audio_path, selected_format)
                     sentiment = analyze_sentiment(result_text)
@@ -165,23 +154,41 @@ def main():
     with tabs[1]:
         st.subheader("🎙️ Record Audio Now")
         lecture_title = st.text_input("Lecture Title (for recorded audio)")
-        audio = audiorecorder("🔴 Start Recording", "⏹ Stop Recording")
-        if len(audio) > 0:
-            audio_bytes = io.BytesIO()
-            audio.export(audio_bytes, format="wav")
-            st.audio(audio_bytes.getvalue(), format="audio/wav")
+
+        recorder = AudioRecorder()
+        ctx = webrtc_streamer(
+            key="audio",
+            mode=WebRtcMode.SENDRECV,
+            audio_receiver_size=1024,
+            client_settings=ClientSettings(media_stream_constraints={"audio": True, "video": False}),
+            rtc_configuration={},
+            audio_frame_callback=recorder.recv,
+        )
+
+        if ctx.state.playing:
+            st.write("🎙️ Recording... Speak now.")
+
+        elif recorder.frames:
+            st.success("✅ Recording complete.")
+            filename = f"recorded_{datetime.now().strftime('%Y%m%d_%H%M%S')}.wav"
+            audio_path = tempfile.NamedTemporaryFile(delete=False, suffix=".wav").name
+
+            with wave.open(audio_path, 'wb') as wf:
+                wf.setnchannels(1)
+                wf.setsampwidth(2)
+                wf.setframerate(48000)
+                for frame in recorder.frames:
+                    wf.writeframes(frame.tobytes())
+
+            with open(audio_path, "rb") as audio_file:
+                st.audio(audio_file.read(), format="audio/wav")
+
             selected_format = st.selectbox("Choose output format for recorded audio", ["Conversation style, accurately identify speakers", "Paragraph", "Bullet points", "Summary"], key="record_format")
             option = st.selectbox("Choose an option", ["Transcribe", "Translate"], key="record_option")
-            if st.button("Transcribe/Translate Recorded Audio"):
-                with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_file:
-                    audio.export(temp_file.name, format="wav")
-                    audio_path = temp_file.name
-                if option == "Transcribe":
-                    if engine == "Gemini":
-                        result_text = transcribe(audio_path, selected_format)
-                    else:
-                        result_text = transcribe_with_whisper(audio_path)
 
+            if st.button("Transcribe/Translate Recorded Audio"):
+                if option == "Transcribe":
+                    result_text = transcribe(audio_path, selected_format)
                 else:
                     result_text = translate(audio_path, selected_format)
                 sentiment = analyze_sentiment(result_text)
@@ -203,15 +210,6 @@ def main():
                 with col2:
                     with open(text_path, "rb") as f:
                         st.download_button("⬇️ Download Text File", f, file_name=text_path)
-    st.markdown("""
-    <div style='text-align: center; padding: 20px 10px;'>
-        <img src='https://www.lbsnaa.gov.in/admin_assets/images/logo.png' width='200' style='margin-bottom: 10px;' />
-        <h3>NICTU, LBSNAA</h3>
-        <p>This tool helps automate transcription and analysis of lectures using AI.</p>
-        <a href='mailto:nictu@lbsnaa.gov.in' target='_blank'>📧 Send Feedback @ nictu@lbsnaa.gov.in</a>
-    </div>
-    """, unsafe_allow_html=True)
-
 
 if __name__ == "__main__":
     main()
