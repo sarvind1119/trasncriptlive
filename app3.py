@@ -22,7 +22,7 @@ sys.modules["torch.classes"] = torch.classes
 warnings.filterwarnings("ignore", message="FP16 is not supported on CPU; using FP32 instead")
 
 
-whisper_model = whisper.load_model("base")  # or "small", "medium", "large"
+whisper_model = whisper.load_model("tiny")  # or "small", "medium", "large"
 
 engine = st.radio("Choose transcription engine", ["Gemini", "Whisper (Local)"])
 
@@ -203,6 +203,15 @@ def main():
                 with col2:
                     with open(text_path, "rb") as f:
                         st.download_button("⬇️ Download Text File", f, file_name=text_path)
+    st.markdown("""
+    <div style='text-align: center; padding: 20px 10px;'>
+        <img src='https://www.lbsnaa.gov.in/admin_assets/images/logo.png' width='200' style='margin-bottom: 10px;' />
+        <h3>NICTU, LBSNAA</h3>
+        <p>This tool helps automate transcription and analysis of lectures using AI.</p>
+        <a href='mailto:nictu@lbsnaa.gov.in' target='_blank'>📧 Send Feedback @ nictu@lbsnaa.gov.in</a>
+    </div>
+    """, unsafe_allow_html=True)
+
 
 if __name__ == "__main__":
     main()
