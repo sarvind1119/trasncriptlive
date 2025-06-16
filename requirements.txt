@@ -1,10 +1,7 @@
 streamlit
+streamlit-webrtc
 google-generativeai
-pydub
-ffmpeg-python
-textblob
 pandas
-openpyxl
+textblob
 python-dotenv
-streamlit-audiorecorder
-
+av
